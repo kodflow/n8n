@@ -220,6 +220,11 @@ export class License implements LicenseProvider {
 	isLicensed(feature: BooleanLicenseFeature) {
 		// DEV MODE: Bypass license check if development enterprise mode is enabled
 		if (process.env.N8N_DEV_ENTERPRISE_MODE === 'true') {
+			// Special case: API_DISABLED is a negative feature - when enabled, it disables the API
+			// In dev mode, we want the API to be enabled, so return false for this feature
+			if (feature === LICENSE_FEATURES.API_DISABLED) {
+				return false;
+			}
 			return true;
 		}
 		return this.manager?.hasFeatureEnabled(feature) ?? false;

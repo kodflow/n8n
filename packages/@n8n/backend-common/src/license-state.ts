@@ -153,6 +153,11 @@ export class LicenseState {
 	}
 
 	isAPIDisabled() {
+		// DEV MODE: In dev mode, we want the API to be enabled
+		// API_DISABLED is a negative feature, so return false in dev mode
+		if (this.isDevEnterpriseMode()) {
+			return false;
+		}
 		return this.isLicensed('feat:apiDisabled');
 	}
 
