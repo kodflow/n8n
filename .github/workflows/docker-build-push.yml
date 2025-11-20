@@ -44,6 +44,15 @@ on:
         required: false
         type: string
 
+  push:
+    branches:
+      - 'master'
+    paths:
+      - 'packages/**'
+      - 'docker/images/n8n/**'
+      - 'docker/images/runners/**'
+      - '.github/workflows/docker-build-push.yml'
+
   pull_request:
     types:
       - opened
@@ -86,6 +95,14 @@ jobs:
             {
               echo "release_type=nightly"
               echo "n8n_version=snapshot"
+              echo "push_enabled=true"
+            } >> "$GITHUB_OUTPUT"
+
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
+            # Master branch builds get latest tag with multi-arch support
+            {
+              echo "release_type=latest"
+              echo "n8n_version=latest"
               echo "push_enabled=true"
             } >> "$GITHUB_OUTPUT"
 
@@ -132,7 +149,7 @@ jobs:
         run: |
           RELEASE_TYPE="${{ steps.context.outputs.release_type }}"
 
-          # Branch builds only need AMD64, everything else needs both platforms
+          # Branch builds only need AMD64 for speed, everything else needs both platforms
           if [[ "$RELEASE_TYPE" == "branch" ]]; then
             MATRIX='{
               "platform": ["amd64"],
@@ -143,7 +160,7 @@ jobs:
               }]
             }'
           else
-            # All other builds (stable, nightly, dev, PR) need both platforms
+            # All other builds (stable, nightly, latest, dev, PR) need both platforms
             MATRIX='{
               "platform": ["amd64", "arm64"],
               "include": [{
@@ -221,6 +238,11 @@ jobs:
               PRIMARY_GHCR_MANIFEST_TAG_VALUE="${GHCR_BASE}:nightly"
               GHCR_TAGS_FOR_PUSH="${PRIMARY_GHCR_MANIFEST_TAG_VALUE}-${PLATFORM}"
               DOCKER_TAGS_FOR_PUSH="${DOCKER_BASE}:nightly-${PLATFORM}"
+              ;;
+            "latest")
+              PRIMARY_GHCR_MANIFEST_TAG_VALUE="${GHCR_BASE}:latest"
+              GHCR_TAGS_FOR_PUSH="${PRIMARY_GHCR_MANIFEST_TAG_VALUE}-${PLATFORM}"
+              DOCKER_TAGS_FOR_PUSH="${DOCKER_BASE}:latest-${PLATFORM}"
               ;;
             "branch")
               PRIMARY_GHCR_MANIFEST_TAG_VALUE="${GHCR_BASE}:${N8N_VERSION_TAG}"
@@ -382,6 +404,12 @@ jobs:
                 echo "CREATE_DOCKERHUB_MANIFEST=true"
               } >> "$GITHUB_OUTPUT"
               ;;
+            "latest")
+              {
+                echo "DOCKER_MANIFEST_TAG=${DOCKER_BASE}:latest"
+                echo "CREATE_DOCKERHUB_MANIFEST=true"
+              } >> "$GITHUB_OUTPUT"
+              ;;
             "dev")
               if [[ "$N8N_VERSION" != pr-* ]]; then
                 {
@@ -416,6 +444,10 @@ jobs:
                 ;;
               "nightly")
                 echo "DOCKER_MANIFEST_TAG${OUTPUT_SUFFIX}=${DOCKER_BASE}:nightly${SUFFIX}" >> "$GITHUB_OUTPUT"
+                echo "CREATE_DOCKERHUB_MANIFEST${OUTPUT_SUFFIX}=true" >> "$GITHUB_OUTPUT"
+                ;;
+              "latest")
+                echo "DOCKER_MANIFEST_TAG${OUTPUT_SUFFIX}=${DOCKER_BASE}:latest${SUFFIX}" >> "$GITHUB_OUTPUT"
                 echo "CREATE_DOCKERHUB_MANIFEST${OUTPUT_SUFFIX}=true" >> "$GITHUB_OUTPUT"
                 ;;
               "dev")
