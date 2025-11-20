@@ -19,8 +19,7 @@ on:
 
   push:
     branches:
-      - 'feature/**'
-      - 'dev/**'
+      - 'master'
     paths:
       - 'packages/**'
       - 'docker/images/n8n/**'
