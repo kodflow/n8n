@@ -1,0 +1,400 @@
+name: Sync Upstream & Build Latest
+
+# Keeps master in sync with upstream n8n.
+# For each major version (v1, v2, ...): finds the latest upstream tag,
+# creates/updates release/vX branch with kodflow patch, builds Docker image.
+#
+# Strategy:
+#   - Only 2 release branches: release/v1 and release/v2
+#   - Docker tags: ghcr.io/kodflow/n8n:v1 and ghcr.io/kodflow/n8n:v2
+#   - Old release/X.Y.Z branches are cleaned up automatically
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_major:
+        description: 'Force rebuild a specific major version (e.g., 1 or 2)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: kodflow/n8n
+  NODE_VERSION: '24'
+  UPSTREAM_REPO: https://github.com/n8n-io/n8n.git
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Phase 1: Sync master with upstream
+  # ──────────────────────────────────────────────
+  sync-master:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync master with upstream
+        run: |
+          git remote add upstream ${{ env.UPSTREAM_REPO }} || true
+          git fetch upstream master --tags --force
+
+          BEHIND=$(git rev-list HEAD..upstream/master --count)
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "Master already up to date" >> "$GITHUB_STEP_SUMMARY"
+          else
+            git merge --ff-only upstream/master
+            # Push master without tags first (--tags pushes ALL tags and triggers ruleset timeouts)
+            git push origin master
+            echo "Synced $BEHIND commits from upstream" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Push only new n8n@ tags that don't exist on origin yet
+          NEW_TAGS=0
+          for tag in $(git tag -l 'n8n@*'); do
+            if ! git ls-remote --tags origin "$tag" 2>/dev/null | grep -q "$tag"; then
+              git push origin "$tag" 2>/dev/null || true
+              NEW_TAGS=$((NEW_TAGS + 1))
+            fi
+          done
+          if [ "$NEW_TAGS" -gt 0 ]; then
+            echo "Pushed $NEW_TAGS new tags" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Disable upstream workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Disable all active workflows except kodflow ones
+          # This prevents upstream scheduled jobs from running on our fork
+          gh api 'repos/${{ github.repository }}/actions/workflows?per_page=100' \
+            --jq '.workflows[] | select(.state == "active") | select(.path | test("kodflow") | not) | .id' \
+            | while IFS= read -r wid; do
+                gh api "repos/${{ github.repository }}/actions/workflows/$wid/disable" -X PUT --silent 2>/dev/null || true
+              done
+          echo "Disabled non-kodflow workflows" >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────
+  # Phase 2: Find latest tag per major version
+  # ──────────────────────────────────────────────
+  detect-latest:
+    needs: sync-master
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_builds: ${{ steps.detect.outputs.has_builds }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream ${{ env.UPSTREAM_REPO }} || true
+          git fetch upstream --tags --force
+
+      - name: Detect latest version per major
+        id: detect
+        run: |
+          # Handle force rebuild
+          if [ -n "${{ inputs.force_major }}" ]; then
+            MAJOR="${{ inputs.force_major }}"
+            LATEST=$(git tag -l "n8n@${MAJOR}.*" | sed 's/^n8n@//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            if [ -z "$LATEST" ]; then
+              echo "No tags found for major v${MAJOR}"
+              echo 'matrix=[]' >> "$GITHUB_OUTPUT"
+              echo 'has_builds=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "matrix=[{\"major\":\"${MAJOR}\",\"version\":\"${LATEST}\"}]" >> "$GITHUB_OUTPUT"
+            echo "has_builds=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Find all major versions >= 1 that have tags
+          MAJORS=$(git tag -l 'n8n@*' | sed 's/^n8n@//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | cut -d. -f1 | sort -Vru | awk '$1 >= 1')
+
+          MATRIX="[]"
+          for major in $MAJORS; do
+            LATEST=$(git tag -l "n8n@${major}.*" | sed 's/^n8n@//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            [ -z "$LATEST" ] && continue
+
+            # Check if release/vX already points to this tag
+            CURRENT_SHA=$(git rev-parse "origin/release/v${major}" 2>/dev/null || echo "none")
+            TAG_SHA=$(git rev-parse "n8n@${LATEST}^{}" 2>/dev/null || git rev-parse "n8n@${LATEST}" 2>/dev/null || echo "unknown")
+
+            # If branch exists, check if the tag is already the base
+            # We check the commit message for the version to detect updates
+            if [ "$CURRENT_SHA" != "none" ]; then
+              CURRENT_MSG=$(git log -1 --format=%s "origin/release/v${major}" 2>/dev/null || echo "")
+              if echo "$CURRENT_MSG" | grep -q "patch for ${LATEST}$"; then
+                echo "release/v${major} already at ${LATEST} — skipping"
+                continue
+              fi
+            fi
+
+            MATRIX=$(echo "$MATRIX" | jq -c --arg m "$major" --arg v "$LATEST" '. + [{"major": $m, "version": $v}]')
+          done
+
+          COUNT=$(echo "$MATRIX" | jq 'length')
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "has_builds=$([ "$COUNT" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+          echo "## Detected Versions" >> "$GITHUB_STEP_SUMMARY"
+          echo "$MATRIX" | jq -r '.[] | "- v\(.major) → \(.version)"' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "- All release branches up to date" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ──────────────────────────────────────────────
+  # Phase 3: Build release branch + Docker image
+  # ──────────────────────────────────────────────
+  build-release:
+    needs: detect-latest
+    if: needs.detect-latest.outputs.has_builds == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.detect-latest.outputs.matrix) }}
+      max-parallel: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create release branch from upstream tag
+        run: |
+          git remote add upstream ${{ env.UPSTREAM_REPO }} || true
+          git fetch upstream --tags --force
+
+          # Checkout the upstream tag
+          git checkout "n8n@${{ matrix.version }}"
+          git checkout -b "release/v${{ matrix.major }}"
+
+          # Apply kodflow patch from the default branch
+          git fetch origin unlock-enterprise-mode
+          git checkout origin/unlock-enterprise-mode -- \
+            docker/images/n8n/Dockerfile.kodflow \
+            docker/images/n8n/kodflow-entrypoint.sh \
+            2>/dev/null
+
+          # Remove upstream workflows (GITHUB_TOKEN cannot push workflow changes)
+          git rm -rf .github/workflows/ 2>/dev/null || true
+
+          git add -A
+          git commit -m "feat(kodflow): apply enterprise dev mode patch for ${{ matrix.version }}"
+          git push origin "release/v${{ matrix.major }}" --force
+
+          echo "## Release Branch" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch: \`release/v${{ matrix.major }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: \`${{ matrix.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          CI: true
+
+      - name: Build and compile n8n
+        run: CI=true node scripts/build-n8n.mjs
+        env:
+          CI: true
+          NODE_OPTIONS: '--max-old-space-size=7168'
+
+      - name: Set up QEMU (for multi-platform builds)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/images/n8n/Dockerfile.kodflow
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ matrix.major }}
+          build-args: |
+            N8N_VERSION=${{ matrix.version }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ matrix.major }}"
+          VERSION="${{ matrix.version }}"
+
+          # Delete existing release (if any) and its tag
+          gh release delete "$TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          git push origin --delete "refs/tags/$TAG" 2>/dev/null || true
+
+          # Create new release pointing to the release branch
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --target "release/$TAG" \
+            --title "n8n $TAG ($VERSION)" \
+            --notes "## n8n $TAG — Enterprise Dev Mode
+
+          Latest $TAG release with Kodflow enterprise development mode patch.
+
+          **Base version:** \`$VERSION\`
+          **Docker image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG\`
+
+          \`\`\`bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG
+          \`\`\`
+
+          This release is automatically updated when a new $TAG tag is published upstream."
+
+  # ──────────────────────────────────────────────
+  # Phase 4: Cleanup legacy release branches
+  # ──────────────────────────────────────────────
+  cleanup:
+    needs: [detect-latest, build-release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Cleanup legacy release branches
+        run: |
+          # Delete any release/X.Y.Z branches (old format) and release/v0 (too old)
+          # Keep only release/v1+ branches (new format)
+          LEGACY=$(git branch -r | grep 'origin/release/' | sed 's|.*origin/release/||' | tr -d ' ' | grep -E '^([0-9]+\.|v0$)' || true)
+
+          if [ -z "$LEGACY" ]; then
+            echo "No legacy branches to clean up" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          DELETED=0
+          for branch in $LEGACY; do
+            echo "Deleting legacy: release/$branch"
+            git push origin --delete "release/$branch" 2>/dev/null || true
+            DELETED=$((DELETED + 1))
+          done
+
+          echo "## Branch Cleanup" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deleted $DELETED legacy release branches" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup GHCR images
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO_OWNER="${{ github.repository_owner }}"
+          PKG_NAME="n8n"
+
+          # Get all package versions
+          VERSIONS=$(gh api "users/${REPO_OWNER}/packages/container/${PKG_NAME}/versions?per_page=100" 2>/dev/null || true)
+          if [ -z "$VERSIONS" ] || [ "$VERSIONS" = "[]" ]; then
+            echo "No GHCR versions found or no access" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Only delete versions with EXPLICIT tags that are NOT vN (N >= 1)
+          # NEVER delete untagged versions — multi-platform images store
+          # per-architecture manifests as untagged versions referenced by the index
+          DELETED=0
+          echo "$VERSIONS" | jq -c '.[]' | while IFS= read -r ver; do
+            VER_ID=$(echo "$ver" | jq -r '.id')
+            TAG_COUNT=$(echo "$ver" | jq '.metadata.container.tags | length')
+            TAGS=$(echo "$ver" | jq -r '.metadata.container.tags | join(",")')
+
+            # Skip untagged versions (they may be platform-specific manifests)
+            if [ "$TAG_COUNT" -eq 0 ]; then
+              continue
+            fi
+
+            # Keep if any tag matches vN (N >= 1)
+            if echo "$TAGS" | grep -qE '(^|,)v[1-9][0-9]*($|,)'; then
+              echo "Keeping: $TAGS (id=$VER_ID)"
+            else
+              echo "Deleting: $TAGS (id=$VER_ID)"
+              gh api "users/${REPO_OWNER}/packages/container/${PKG_NAME}/versions/${VER_ID}" -X DELETE 2>/dev/null || true
+              DELETED=$((DELETED + 1))
+            fi
+          done
+
+          echo "## GHCR Cleanup" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Cleaned up $DELETED old image versions" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup n8n-benchmark package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO_OWNER="${{ github.repository_owner }}"
+          # Delete all versions of n8n-benchmark
+          VERSIONS=$(gh api "users/${REPO_OWNER}/packages/container/n8n-benchmark/versions?per_page=100" --jq '.[].id' 2>/dev/null || true)
+
+          if [ -z "$VERSIONS" ]; then
+            echo "No n8n-benchmark package found" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "$VERSIONS" | while IFS= read -r vid; do
+            [ -z "$vid" ] && continue
+            gh api "users/${REPO_OWNER}/packages/container/n8n-benchmark/versions/${vid}" -X DELETE 2>/dev/null || true
+            echo "Deleted n8n-benchmark version $vid"
+          done
+
+          echo "## n8n-benchmark Cleanup" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deleted all n8n-benchmark versions" >> "$GITHUB_STEP_SUMMARY"

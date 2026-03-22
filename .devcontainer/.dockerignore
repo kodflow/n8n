@@ -1,0 +1,10 @@
+# Exclude everything by default
+*
+
+# Include only what's needed for the Docker build
+!Dockerfile
+
+# Exclude sensitive files
+.env
+mcp.json
+hooks/shared/.env

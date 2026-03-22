@@ -23,6 +23,8 @@
 !docker/images
 !docker/images/n8n
 !docker/images/n8n/docker-entrypoint.sh
+!docker/images/n8n/kodflow-entrypoint.sh
+!docker/images/n8n/Dockerfile.kodflow
 !docker/images/runners
 !docker/images/runners/n8n-task-runners.json
 

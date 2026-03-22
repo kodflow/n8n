@@ -1,15 +1,19 @@
-ARG NODE_VERSION=24
+# =============================================================================
+# n8n Development Container
+# =============================================================================
+# Based on kodflow devcontainer-template (Zsh, P10k, Claude Code, grepai, rtk)
+# Node.js added via devcontainer feature (see devcontainer.json)
+# Adds n8n-specific system dependencies (graphicsmagick, postgresql-client)
+# =============================================================================
 
-FROM node:${NODE_VERSION}-alpine
+FROM ghcr.io/kodflow/devcontainer-template:latest
 
-ARG NODE_VERSION
+USER root
 
-RUN apk add --no-cache \
-    openssh sudo shadow bash libc-utils \
-    git openssl graphicsmagick tini tzdata ca-certificates libc6-compat
-RUN echo node ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/node && chmod 0440 /etc/sudoers.d/node
-RUN mkdir /workspaces && chown node:node /workspaces
-RUN corepack enable
+# n8n-specific system dependencies (build-essential + python3 already in base)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    graphicsmagick \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
-USER node
-RUN mkdir -p ~/.pnpm-store && pnpm config set store-dir ~/.pnpm-store --global
+USER vscode
