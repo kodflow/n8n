@@ -11,9 +11,12 @@ FROM ghcr.io/kodflow/devcontainer-template:latest
 USER root
 
 # n8n-specific system dependencies (build-essential + python3 already in base)
+# Docker CLI for Docker-outside-of-Docker (uses host Docker via socket mount)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     graphicsmagick \
     postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+    docker.io \
+    && rm -rf /var/lib/apt/lists/* \
+    && usermod -aG docker vscode
 
 USER vscode

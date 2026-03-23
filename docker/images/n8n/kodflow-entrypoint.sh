@@ -30,8 +30,8 @@ if [ "$N8N_DEV_ENTERPRISE_MODE" = "true" ]; then
         let d = '';
         res.on('data', c => d += c);
         res.on('end', () => {
-          if (d.includes('instanceId')) {
-            if (d.includes('\"isInstanceOwnerSetUp\":true')) {
+          if (d.includes('settingsMode')) {
+            if (d.includes('\"showSetupOnFirstLoad\":false')) {
               log('Owner already configured, skipping');
             } else {
               log('n8n ready, creating owner (${EMAIL})...');
