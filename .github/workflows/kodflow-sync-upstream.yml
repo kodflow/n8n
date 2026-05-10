@@ -41,7 +41,12 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # SYNC_TOKEN must be a PAT with `Workflows: Write` permission on this
+          # repo. The default GITHUB_TOKEN cannot push when upstream changes any
+          # `.github/workflows/*.yml` file (GitHub security restriction).
+          # Falls back to GITHUB_TOKEN so the workflow doesn't break entirely
+          # when SYNC_TOKEN is missing (sync of non-workflow changes still works).
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -180,7 +185,10 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Release branches strip .github/workflows/, so the push diff still
+          # touches workflow paths (deletions). GITHUB_TOKEN can't push that;
+          # SYNC_TOKEN (workflows: write) is required.
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -308,7 +316,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Same reason as build-release: deleting legacy `release/X.Y.Z`
+          # branches via push may carry workflow-file deletions.
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
