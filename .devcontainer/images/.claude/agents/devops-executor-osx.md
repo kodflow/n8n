@@ -1,5 +1,7 @@
 ---
 name: devops-executor-osx
+teamRole: teammate
+teamSafe: true
 description: |
   macOS/OSX system administration router + executor. Dispatches to
   os-specialist-macos for all macOS operations. Retains generic
@@ -8,11 +10,6 @@ tools:
   - Read
   - Glob
   - Grep
-  - mcp__grepai__grepai_search
-  - mcp__grepai__grepai_trace_callers
-  - mcp__grepai__grepai_trace_callees
-  - mcp__grepai__grepai_trace_graph
-  - mcp__grepai__grepai_index_status
   - Bash
   - Task
 model: haiku
@@ -351,3 +348,15 @@ sudo killall -HUP mDNSResponder
 | Disable Gatekeeper | Malware risk |
 | Allow all incoming | Security exposure |
 | Skip updates | Vulnerabilities |
+
+---
+
+## When spawned as a TEAMMATE
+
+You are an independent Claude Code instance. You do NOT see the lead's conversation history.
+
+- Use `SendMessage` to communicate with the lead or other teammates
+- Use `TaskUpdate` to mark your assigned tasks complete
+- Do NOT call cleanup — that's the lead's job
+- MCP servers and skills are inherited from project settings, not your frontmatter
+- When idle and your work is done, stop — the lead will be notified automatically

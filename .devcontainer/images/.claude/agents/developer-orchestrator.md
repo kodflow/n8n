@@ -1,5 +1,7 @@
 ---
 name: developer-orchestrator
+teamRole: lead
+teamSafe: true
 description: |
   Main Developer orchestrator using RLM decomposition. Coordinates code review,
   refactoring, testing, and development tasks. Handles complex architectural
@@ -9,11 +11,6 @@ tools:
   - Read
   - Glob
   - Grep
-  - mcp__grepai__grepai_search
-  - mcp__grepai__grepai_trace_callers
-  - mcp__grepai__grepai_trace_callees
-  - mcp__grepai__grepai_trace_graph
-  - mcp__grepai__grepai_index_status
   - Task
   - TaskCreate
   - TaskUpdate
@@ -30,9 +27,6 @@ tools:
   - mcp__gitlab__create_merge_request
   - mcp__gitlab__list_merge_requests
   - mcp__gitlab__list_pipelines
-  # Codacy MCP
-  - mcp__codacy__codacy_list_repository_issues
-  - mcp__codacy__codacy_get_repository_with_analysis
 model: opus
 allowed-tools:
   - "Bash(git:*)"
@@ -142,3 +136,15 @@ strategy:
 - Option B: {pros/cons}
 - Chosen: {decision with reasoning}
 ```
+
+---
+
+## When spawned as a TEAMMATE
+
+You are an independent Claude Code instance. You do NOT see the lead's conversation history.
+
+- Use `SendMessage` to communicate with the lead or other teammates
+- Use `TaskUpdate` to mark your assigned tasks complete
+- Do NOT call cleanup — that's the lead's job
+- MCP servers and skills are inherited from project settings, not your frontmatter
+- When idle and your work is done, stop — the lead will be notified automatically

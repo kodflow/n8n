@@ -37,6 +37,12 @@ if [[ "$FILE" == *".claude/contexts/"* ]] || \
 fi
 
 # === Format only (fast: goimports ~100ms, ruff ~50ms, prettier ~200ms) ===
+# ktn-linter integration is intentionally NOT called from this script —
+# Claude Code keeps only the LAST JSON written by a PostToolUse chain, so a
+# script-level curl here would race with the project-level HTTP hook and
+# silently drop `decision: "block"` payloads (issue #344). Consumers wire
+# ktn-linter via a native HTTP hook in `.claude/settings.json` instead; see
+# `.devcontainer/images/CLAUDE.md` for the recipe.
 FMT_OUT=$("$SCRIPT_DIR/format.sh" "$FILE" 2>&1) || true
 
 # Track edited file for on-stop-quality.sh batch processing (session-scoped)
