@@ -63,22 +63,16 @@ jobs:
             echo "Master already up to date" >> "$GITHUB_STEP_SUMMARY"
           else
             git merge --ff-only upstream/master
-            # Push master without tags first (--tags pushes ALL tags and triggers ruleset timeouts)
             git push origin master
             echo "Synced $BEHIND commits from upstream" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Push only new n8n@ tags that don't exist on origin yet
-          NEW_TAGS=0
-          for tag in $(git tag -l 'n8n@*'); do
-            if ! git ls-remote --tags origin "$tag" 2>/dev/null | grep -q "$tag"; then
-              git push origin "$tag" 2>/dev/null || true
-              NEW_TAGS=$((NEW_TAGS + 1))
-            fi
-          done
-          if [ "$NEW_TAGS" -gt 0 ]; then
-            echo "Pushed $NEW_TAGS new tags" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          # Tags are intentionally NOT pushed to origin. Pushing a tag triggers
+          # GitHub Actions workflows AS THEY EXISTED at that tagged commit
+          # (e.g. n8n@0.95 ships obsolete "Node CI" / "Python CI" / "Docker Image CI"
+          # that cannot be disabled via the API because they're not in master HEAD).
+          # Phase 2 (detect-latest) and Phase 3 (build-release) fetch tags directly
+          # from upstream, so origin never needs them.
 
       - name: Disable upstream workflows
         env:
