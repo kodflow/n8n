@@ -15,6 +15,8 @@ class ProviderNotSetError extends UnexpectedError {
 export class LicenseState {
 	licenseProvider: LicenseProvider | null = null;
 
+	private readonly devEnterpriseMode = process.env.N8N_DEV_ENTERPRISE_MODE === 'true';
+
 	setLicenseProvider(provider: LicenseProvider) {
 		this.licenseProvider = provider;
 	}
@@ -31,6 +33,12 @@ export class LicenseState {
 	 * If the feature is an array of strings, it checks if any of the features are licensed
 	 */
 	isLicensed(feature: BooleanLicenseFeature | BooleanLicenseFeature[]) {
+		if (this.devEnterpriseMode) {
+			// API_DISABLED is a negative feature — in dev mode keep API enabled
+			if (feature === LICENSE_FEATURES.API_DISABLED) return false;
+			return true;
+		}
+
 		this.assertProvider();
 
 		if (typeof feature === 'string') return this.licenseProvider.isLicensed(feature);
@@ -45,6 +53,11 @@ export class LicenseState {
 	}
 
 	getValue<T extends keyof FeatureReturnType>(feature: T): FeatureReturnType[T] {
+		if (this.devEnterpriseMode) {
+			if (feature === 'quota:aiCredits') return 1_000_000 as FeatureReturnType[T];
+			return UNLIMITED_LICENSE_QUOTA as FeatureReturnType[T];
+		}
+
 		this.assertProvider();
 
 		return this.licenseProvider.getValue(feature);

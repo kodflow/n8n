@@ -252,6 +252,10 @@ export class License implements LicenseProvider {
 	}
 
 	isLicensed(feature: BooleanLicenseFeature) {
+		if (process.env.N8N_DEV_ENTERPRISE_MODE === 'true') {
+			if (feature === LICENSE_FEATURES.API_DISABLED) return false;
+			return true;
+		}
 		return this.manager?.hasFeatureEnabled(feature) ?? false;
 	}
 
@@ -375,6 +379,10 @@ export class License implements LicenseProvider {
 	}
 
 	getValue<T extends keyof FeatureReturnType>(feature: T): FeatureReturnType[T] {
+		if (process.env.N8N_DEV_ENTERPRISE_MODE === 'true') {
+			if (feature === 'quota:aiCredits') return 1_000_000 as FeatureReturnType[T];
+			return UNLIMITED_LICENSE_QUOTA as FeatureReturnType[T];
+		}
 		return this.manager?.getFeatureValue(feature) as FeatureReturnType[T];
 	}
 

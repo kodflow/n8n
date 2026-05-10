@@ -1,0 +1,141 @@
+# ============================================
+# DEVELOPMENT CONFIGURATION
+# ============================================
+# This file is for local development only
+# Uses the :latest image from your custom build
+# ============================================
+
+networks:
+  n8n_network:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: n8n-postgresql-dev
+    hostname: n8n-postgresql-dev
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U n8n_dev_user -d n8n_dev_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      POSTGRES_DB: n8n_dev_db
+      POSTGRES_USER: n8n_dev_user
+      POSTGRES_PASSWORD: dev_password_123
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: Europe/Paris
+    volumes:
+      # Use relative path for local development
+      - ./volumes/postgresql:/var/lib/postgresql/data
+    ports:
+      # Expose PostgreSQL port for debugging/inspection
+      - "5432:5432"
+    networks:
+      - n8n_network
+
+  n8n:
+    # Use your custom image from GitHub Container Registry
+    # This image is automatically built and pushed by GitHub Actions
+    image: ghcr.io/kodflow/n8n:latest
+    container_name: n8n-dev
+    hostname: n8n-dev
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    ports:
+      - "5678:5678"
+    environment:
+      # ============================================
+      # DEVELOPMENT ENTERPRISE MODE - ENABLED
+      # ============================================
+      # This enables ALL Enterprise features without a license
+      # For development and testing purposes only
+      N8N_DEV_ENTERPRISE_MODE: "true"
+
+      # ============================================
+      # Development Mode Settings
+      # ============================================
+      NODE_ENV: development
+      NODE_FUNCTION_ALLOW_BUILTIN: "*"
+      NODE_FUNCTION_ALLOW_EXTERNAL: "*"
+
+      # Application
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      N8N_RUNNERS_ENABLED: "true"
+
+      # Webhooks - Development domain
+      WEBHOOK_URL: https://n8n.making.codes
+
+      # Timezone
+      GENERIC_TIMEZONE: Europe/Paris
+      TZ: Europe/Paris
+
+      # Database
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: n8n-postgresql-dev
+      DB_POSTGRESDB_DATABASE: n8n_dev_db
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_USER: n8n_dev_user
+      DB_POSTGRESDB_PASSWORD: dev_password_123
+
+      # ============================================
+      # Development Optimizations
+      # ============================================
+      # Disable data pruning in dev (keep all executions)
+      EXECUTIONS_DATA_PRUNE: "false"
+
+      # Enable metrics for debugging
+      N8N_METRICS: "true"
+
+      # Enable debug logging
+      N8N_LOG_LEVEL: debug
+      N8N_LOG_OUTPUT: console
+
+      # Disable telemetry and banners
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_HIRING_BANNER_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+
+      # ============================================
+      # Security - Relaxed for Development
+      # ============================================
+      # Allow custom certificates (useful for local HTTPS testing)
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+
+      # ============================================
+      # Performance - Optimized for Dev
+      # ============================================
+      # Longer timeout for debugging
+      EXECUTIONS_TIMEOUT: 3600
+      EXECUTIONS_TIMEOUT_MAX: 7200
+
+    volumes:
+      # Use relative paths for local development
+      - ./volumes/data:/home/node/.n8n
+      - ./volumes/files:/files
+
+      # Optional: Mount local code for hot reload (uncomment if needed)
+      # - ./packages:/home/node/packages:ro
+
+    networks:
+      - n8n_network
+    depends_on:
+      postgres:
+        condition: service_healthy

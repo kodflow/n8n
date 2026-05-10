@@ -2,18 +2,26 @@
 	"name": "n8n",
 	"dockerComposeFile": "docker-compose.yml",
 	"service": "n8n",
-	"workspaceFolder": "/workspaces",
-	"mounts": [
-		"type=bind,source=${localWorkspaceFolder},target=/workspaces,consistency=cached",
-		"type=bind,source=${localEnv:HOME}/.ssh,target=/home/node/.ssh,consistency=cached",
-		"type=bind,source=${localEnv:HOME}/.n8n,target=/home/node/.n8n,consistency=cached"
-	],
-	"forwardPorts": [8080, 5678],
-	"postCreateCommand": "corepack prepare --activate && pnpm install",
-	"postAttachCommand": "pnpm build",
+	"workspaceFolder": "/workspace",
+	"remoteUser": "vscode",
+	"initializeCommand": ".devcontainer/hooks/lifecycle/initialize.sh",
+	"onCreateCommand": ".devcontainer/hooks/lifecycle/onCreate.sh",
+	"postCreateCommand": ".devcontainer/hooks/lifecycle/postCreate.sh",
+	"postStartCommand": ".devcontainer/hooks/lifecycle/postStart.sh",
+	"postAttachCommand": ".devcontainer/hooks/lifecycle/postAttach.sh",
+	"features": {
+		"./features/languages/nodejs": {
+			"version": "22"
+		}
+	},
+	"forwardPorts": [5678],
 	"customizations": {
-		"codespaces": {
-			"openFiles": ["CONTRIBUTING.md"]
+		"vscode": {
+			"extensions": [
+				"dbaeumer.vscode-eslint",
+				"esbenp.prettier-vscode",
+				"Vue.volar"
+			]
 		}
 	}
 }
