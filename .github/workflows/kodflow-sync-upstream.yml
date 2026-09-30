@@ -36,17 +36,30 @@ jobs:
   sync-master:
     runs-on: ubuntu-latest
     steps:
+      # An installation token of the kodflow-ci app, limited to this
+      # repository: the fast-forward of master carries every upstream change,
+      # workflow files included. GITHUB_TOKEN cannot push a change under
+      # .github/workflows (GitHub security restriction); workflows: write can.
+      # Without the app configured, GITHUB_TOKEN still syncs whatever touches
+      # no workflow file.
+      - name: Token for pushes touching workflow files
+        id: sync-token
+        if: ${{ vars.CI_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: kodflow
+          repositories: n8n
+          permission-contents: write
+          permission-workflows: write
+
       - name: Checkout master
         uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
-          # SYNC_TOKEN must be a PAT with `Workflows: Write` permission on this
-          # repo. The default GITHUB_TOKEN cannot push when upstream changes any
-          # `.github/workflows/*.yml` file (GitHub security restriction).
-          # Falls back to GITHUB_TOKEN so the workflow doesn't break entirely
-          # when SYNC_TOKEN is missing (sync of non-workflow changes still works).
-          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.sync-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -174,15 +187,30 @@ jobs:
         include: ${{ fromJSON(needs.detect-latest.outputs.matrix) }}
       max-parallel: 1
     steps:
+      # An installation token of the kodflow-ci app, limited to this
+      # repository: release branches strip .github/workflows/, so their push
+      # still touches workflow paths (deletions). GITHUB_TOKEN cannot push a change under
+      # .github/workflows (GitHub security restriction); workflows: write can.
+      # Without the app configured, GITHUB_TOKEN still syncs whatever touches
+      # no workflow file.
+      - name: Token for pushes touching workflow files
+        id: sync-token
+        if: ${{ vars.CI_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: kodflow
+          repositories: n8n
+          permission-contents: write
+          permission-workflows: write
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
-          # Release branches strip .github/workflows/, so the push diff still
-          # touches workflow paths (deletions). GITHUB_TOKEN can't push that;
-          # SYNC_TOKEN (workflows: write) is required.
-          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.sync-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -306,13 +334,29 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # An installation token of the kodflow-ci app, limited to this
+      # repository: deleting legacy `release/X.Y.Z` branches by push may
+      # carry workflow-file deletions. GITHUB_TOKEN cannot push a change under
+      # .github/workflows (GitHub security restriction); workflows: write can.
+      # Without the app configured, GITHUB_TOKEN still syncs whatever touches
+      # no workflow file.
+      - name: Token for pushes touching workflow files
+        id: sync-token
+        if: ${{ vars.CI_APP_CLIENT_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: kodflow
+          repositories: n8n
+          permission-contents: write
+          permission-workflows: write
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # Same reason as build-release: deleting legacy `release/X.Y.Z`
-          # branches via push may carry workflow-file deletions.
-          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.sync-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
