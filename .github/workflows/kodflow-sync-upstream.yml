@@ -35,25 +35,76 @@ jobs:
   # ──────────────────────────────────────────────
   sync-master:
     runs-on: ubuntu-latest
+    # actions: write is what disabling a workflow and cancelling a run take;
+    # without it the disable step below failed on every run, silently, and
+    # upstream workflows kept running here.
+    permissions:
+      actions: write
+      contents: write
     steps:
+      # An installation token of the kodflow-ci app, limited to this
+      # repository: the fast-forward of master carries every upstream change,
+      # workflow files included. GITHUB_TOKEN cannot push a change under
+      # .github/workflows (GitHub security restriction); workflows: write can.
+      #
+      # If minting fails (a missing or revoked key), the job goes on with
+      # GITHUB_TOKEN rather than stopping, as it always did without a sync
+      # token: a sync with no workflow change still lands, the later jobs still
+      # run, a sync that does carry one is refused by GitHub on the push, and
+      # the warning below names the cause on every run until it is fixed.
+      - name: Token for pushes touching workflow files
+        id: sync-token
+        if: ${{ vars.CI_APP_CLIENT_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: kodflow
+          repositories: n8n
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Report a failed token
+        if: ${{ steps.sync-token.outcome == 'failure' }}
+        run: echo "::warning::kodflow-ci token not created (check CI_APP_PRIVATE_KEY); falling back to GITHUB_TOKEN, which cannot push workflow-file changes."
+
       - name: Checkout master
         uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
-          # SYNC_TOKEN must be a PAT with `Workflows: Write` permission on this
-          # repo. The default GITHUB_TOKEN cannot push when upstream changes any
-          # `.github/workflows/*.yml` file (GitHub security restriction).
-          # Falls back to GITHUB_TOKEN so the workflow doesn't break entirely
-          # when SYNC_TOKEN is missing (sync of non-workflow changes still works).
-          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.sync-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # Upstream ships 100+ workflows and this fork must run none of them. No
+      # Actions setting allows workflows by file, so each one is disabled by
+      # id. A push made with an installation token starts workflows (one made
+      # with GITHUB_TOKEN does not), so this runs BEFORE the push: every
+      # upstream workflow GitHub already knows is off when master moves.
+      - name: Disable upstream workflows (before the push)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          n=0
+          # Captured first: from a process substitution a failed listing
+          # would read as nothing to disable.
+          ids="$(gh api --paginate 'repos/${{ github.repository }}/actions/workflows?per_page=100' \
+            --jq '.workflows[] | select(.state == "active") | select(.path | test("kodflow") | not) | .id')"
+          while IFS= read -r wid; do
+            [ -n "$wid" ] || continue
+            gh api "repos/${{ github.repository }}/actions/workflows/$wid/disable" -X PUT --silent
+            n=$((n + 1))
+          done <<< "$ids"
+          echo "Disabled $n upstream workflows before the push" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Sync master with upstream
+        id: sync
         run: |
           git remote add upstream ${{ env.UPSTREAM_REPO }} || true
           git fetch upstream master --tags --force
@@ -64,6 +115,7 @@ jobs:
           else
             git merge --ff-only upstream/master
             git push origin master
+            echo "pushed=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
             echo "Synced $BEHIND commits from upstream" >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -74,18 +126,38 @@ jobs:
           # Phase 2 (detect-latest) and Phase 3 (build-release) fetch tags directly
           # from upstream, so origin never needs them.
 
-      - name: Disable upstream workflows
+      # What the step before the push cannot reach: a workflow file NEW in this
+      # sync has no id until master carries it, and the push itself may have
+      # started it. It is disabled now, and every unfinished run of a
+      # non-kodflow workflow on the pushed commit is cancelled, so it lasts
+      # seconds, not a build.
+      - name: Disable and stop what the push started
+        if: ${{ always() && steps.sync.outputs.pushed != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUSHED: ${{ steps.sync.outputs.pushed }}
         run: |
-          # Disable all active workflows except kodflow ones
-          # This prevents upstream scheduled jobs from running on our fork
-          gh api 'repos/${{ github.repository }}/actions/workflows?per_page=100' \
-            --jq '.workflows[] | select(.state == "active") | select(.path | test("kodflow") | not) | .id' \
-            | while IFS= read -r wid; do
-                gh api "repos/${{ github.repository }}/actions/workflows/$wid/disable" -X PUT --silent 2>/dev/null || true
-              done
-          echo "Disabled non-kodflow workflows" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          n=0
+          # Captured first: from a process substitution a failed listing
+          # would read as nothing to disable.
+          ids="$(gh api --paginate 'repos/${{ github.repository }}/actions/workflows?per_page=100' \
+            --jq '.workflows[] | select(.state == "active") | select(.path | test("kodflow") | not) | .id')"
+          while IFS= read -r wid; do
+            [ -n "$wid" ] || continue
+            gh api "repos/${{ github.repository }}/actions/workflows/$wid/disable" -X PUT --silent
+            n=$((n + 1))
+          done <<< "$ids"
+          c=0
+          runs="$(gh api --paginate "repos/${{ github.repository }}/actions/runs?head_sha=$PUSHED&per_page=100" \
+            --jq '.workflow_runs[] | select(.status != "completed") | select(.path | test("kodflow") | not) | .id')"
+          while IFS= read -r rid; do
+            [ -n "$rid" ] || continue
+            # A run can finish between the listing and the cancel: not an error.
+            gh api "repos/${{ github.repository }}/actions/runs/$rid/cancel" -X POST --silent || true
+            c=$((c + 1))
+          done <<< "$runs"
+          echo "After the push: disabled $n new upstream workflows, cancelled $c runs" >> "$GITHUB_STEP_SUMMARY"
 
   # ──────────────────────────────────────────────
   # Phase 2: Find latest tag per major version
@@ -174,15 +246,36 @@ jobs:
         include: ${{ fromJSON(needs.detect-latest.outputs.matrix) }}
       max-parallel: 1
     steps:
+      # An installation token of the kodflow-ci app, limited to this
+      # repository: release branches strip .github/workflows/, so their push
+      # still touches workflow paths (deletions). GITHUB_TOKEN cannot push a change under
+      # .github/workflows (GitHub security restriction); workflows: write can.
+      # Without the app configured, GITHUB_TOKEN still syncs whatever touches
+      # no workflow file.
+      - name: Token for pushes touching workflow files
+        id: sync-token
+        if: ${{ vars.CI_APP_CLIENT_ID != '' }}
+        # Same fallback as sync-master, for the same reasons.
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: kodflow
+          repositories: n8n
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Report a failed token
+        if: ${{ steps.sync-token.outcome == 'failure' }}
+        run: echo "::warning::kodflow-ci token not created (check CI_APP_PRIVATE_KEY); falling back to GITHUB_TOKEN, which cannot push workflow-file changes."
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: master
           fetch-depth: 0
-          # Release branches strip .github/workflows/, so the push diff still
-          # touches workflow paths (deletions). GITHUB_TOKEN can't push that;
-          # SYNC_TOKEN (workflows: write) is required.
-          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.sync-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -306,13 +399,35 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # An installation token of the kodflow-ci app, limited to this
+      # repository: deleting legacy `release/X.Y.Z` branches by push may
+      # carry workflow-file deletions. GITHUB_TOKEN cannot push a change under
+      # .github/workflows (GitHub security restriction); workflows: write can.
+      # Without the app configured, GITHUB_TOKEN still syncs whatever touches
+      # no workflow file.
+      - name: Token for pushes touching workflow files
+        id: sync-token
+        if: ${{ vars.CI_APP_CLIENT_ID != '' }}
+        # Same fallback as sync-master, for the same reasons.
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: kodflow
+          repositories: n8n
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Report a failed token
+        if: ${{ steps.sync-token.outcome == 'failure' }}
+        run: echo "::warning::kodflow-ci token not created (check CI_APP_PRIVATE_KEY); falling back to GITHUB_TOKEN, which cannot push workflow-file changes."
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # Same reason as build-release: deleting legacy `release/X.Y.Z`
-          # branches via push may carry workflow-file deletions.
-          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.sync-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
