@@ -64,3 +64,7 @@ mcp.json
 volumes/
 lefthook-local.yml
 .playwright-mcp
+
+# MCP configs can carry tokens: never tracked, at any depth.
+# Committed templates are named mcp.json.tmpl.
+.mcp.json

@@ -6,6 +6,17 @@ This directory contains shared Claude Code configuration for the n8n team.
 
 ### Linear MCP Server
 
+In this fork no file named `mcp.json` or `.mcp.json` is tracked by git, since
+an MCP config can carry tokens. The server definition lives in
+`.claude/mcp.json.tmpl`. Register it once per machine:
+
+```bash
+claude mcp add --scope user linear -- npx -y mcp-remote https://mcp.linear.app/mcp
+```
+
+or copy the template to the (git-ignored) project config:
+`cp .claude/mcp.json.tmpl .mcp.json`.
+
 The Linear MCP server uses OAuth authentication. To connect:
 
 1. Start Claude Code in this repository

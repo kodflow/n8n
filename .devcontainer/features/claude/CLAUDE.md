@@ -32,6 +32,8 @@ This feature leverages Claude's native capabilities:
 
 Settings are stored in `~/.claude/settings.json`.
 MCP servers are configured in project `mcp.json`.
+`mcp.json.tmpl` here is a template only: no file named `mcp.json` or
+`.mcp.json` is ever tracked by git, because the rendered config carries tokens.
 
 ## See Also
 
