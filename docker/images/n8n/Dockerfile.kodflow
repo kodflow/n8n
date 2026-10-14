@@ -1,0 +1,58 @@
+ARG NODE_VERSION=24.13.1
+ARG N8N_VERSION=snapshot
+
+# 1. Rebuild native addons for the container platform
+FROM node:${NODE_VERSION}-alpine AS builder
+COPY ./compiled /usr/local/lib/node_modules/n8n
+RUN apk add --no-cache python3 make g++ && \
+    cd /usr/local/lib/node_modules/n8n && \
+    npm rebuild sqlite3 isolated-vm
+
+# 2. Final image — self-contained, no private base image needed
+FROM node:${NODE_VERSION}-alpine
+
+ARG N8N_VERSION
+ENV NODE_ENV=production
+ENV SHELL=/bin/sh
+
+# OS dependencies (same as upstream n8nio/base)
+RUN apk add --no-cache \
+        git openssh openssl \
+        graphicsmagick tini tzdata \
+        ca-certificates libc6-compat && \
+    rm -rf /tmp/* /root/.npm
+
+# Kodflow defaults: enterprise dev mode, ready out of the box
+ENV N8N_DEV_ENTERPRISE_MODE=true
+ENV N8N_ENCRYPTION_KEY=kodflow-dev-key-not-for-prod
+ENV DB_TYPE=sqlite
+ENV DB_SQLITE_VACUUM_ON_STARTUP=false
+ENV N8N_DIAGNOSTICS_ENABLED=false
+ENV N8N_VERSION_NOTIFICATIONS_ENABLED=false
+ENV N8N_PERSONALIZATION_ENABLED=false
+ENV EXECUTIONS_PRUNING_ENABLED=false
+ENV N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
+ENV N8N_LOG_LEVEL=warn
+
+WORKDIR /home/node
+
+COPY --from=builder /usr/local/lib/node_modules/n8n /usr/local/lib/node_modules/n8n
+COPY docker/images/n8n/docker-entrypoint.sh /
+COPY docker/images/n8n/kodflow-entrypoint.sh /
+
+RUN ln -s /usr/local/lib/node_modules/n8n/bin/n8n /usr/local/bin/n8n && \
+    mkdir -p /home/node/.n8n && \
+    addgroup -S node 2>/dev/null || true && \
+    adduser -S node -G node 2>/dev/null || true && \
+    chown -R node:node /home/node && \
+    chmod +x /kodflow-entrypoint.sh /docker-entrypoint.sh && \
+    rm -rf /root/.npm /tmp/*
+
+EXPOSE 5678/tcp
+USER node
+ENTRYPOINT ["tini", "--", "/kodflow-entrypoint.sh"]
+
+LABEL org.opencontainers.image.title="n8n-kodflow" \
+      org.opencontainers.image.description="n8n with enterprise dev mode - ready to use" \
+      org.opencontainers.image.source="https://github.com/kodflow/n8n" \
+      org.opencontainers.image.version=${N8N_VERSION}
