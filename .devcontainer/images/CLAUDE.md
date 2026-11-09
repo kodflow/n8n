@@ -147,7 +147,6 @@ Configured in `mcp.json.tpl`:
 | `/plan` | Planning mode for implementation strategy |
 | `/do` | Iterative task execution loop (RLM) |
 | `/review` | AI-powered code review (3-tier: agents + Qodo + CodeRabbit) |
-| `/git` | Workflow Git automation (commit, push, PR, merge) |
 | `/search` | Documentation research with official sources |
 | `/docs` | Deep project documentation generation (multi-agent) |
 | `/test` | E2E testing with Playwright MCP |
